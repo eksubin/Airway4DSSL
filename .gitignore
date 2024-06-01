@@ -3,4 +3,6 @@ logs/
 PKG - CT-Covid19-August2020-V1/
 Synth3D/
 Synth3DVal/
+Synth3DTrain/
+Synth3DValTrain/
 .ipynb_checkpoints
