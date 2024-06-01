@@ -1,9 +1,6 @@
 BTCV/
 logs/
 PKG - CT-Covid19-August2020-V1/
-manifest_1712775598664437846.csv
-dataset_0_init_6.json
-output.json
-split_data_btcv.json
-split_data.json
-test_filenames.json
+Synth3D/
+Synth3DVal/
+.ipynb_checkpoints
