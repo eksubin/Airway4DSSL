@@ -239,6 +239,28 @@ def validation(epoch_iterator_val, dice_val_best):
     mean_dice_val = np.mean(dice_vals)
     if mean_dice_val > dice_val_best:
         print(f"validation output shapes {val_outputs.shape}")
+        image_slice = val_outputs[0, 0, :, :, 35].cpu().numpy() > 0.2
+        # image_slice = (image_slice * 255).astype(np.uint8)
+        image = Image.fromarray(image_slice)
+        image_path = os.path.join(
+            logdir, str(mean_dice_val) + experiment_name+ "_output_slice.png")
+        image.save(image_path)
+        mlflow.log_artifact(image_path)
+
+
+       # Convert Pillow image to a matplotlib figure
+        fig, ax = plt.subplots()
+        ax.imshow(image, cmap='gray')
+        ax.axis('off')  # Turn off the axis
+
+        # Save the figure to a temporary file and log it as an MLflow figure
+        figure_path = os.path.join(logdir, experiment_name +
+                                "_output_slice_figure.png")
+        fig.savefig(figure_path, bbox_inches='tight', pad_inches=0)
+
+        # Log the figure as an MLflow figure
+        mlflow.log_artifact(figure_path)
+
     # Log validation dice score
     mlflow.log_metric('val_dice', mean_dice_val, step=global_step)
 
@@ -284,18 +306,6 @@ def train(global_step, train_loader, dice_val_best, global_step_best):
                         dice_val_best, dice_val))
                 torch.save(model.state_dict(),
                            os.path.join(logdir, experiment_name + ".pth"))
-                model.eval()
-                with torch.no_grad():
-                    seg_output = sliding_window_inference(
-                        x, (64, 64, 64), 1, model)
-                    image_slice = seg_output[0, 0, :, :, 35].cpu().numpy() > 0.2
-                    #image_slice = (image_slice * 255).astype(np.uint8)
-                    image = Image.fromarray(image_slice)
-                    image_path = os.path.join(
-                        logdir, str(dice_val) + "_output_slice.png")
-                    image.save(image_path)
-                    mlflow.log_artifact(image_path)
-                    print(f"Here is the shape of output {x.shape}")
             else:
                 print(
                     "Model Was Not Saved ! Current Best Avg. Dice: {} Current Avg. Dice: {}".format(
@@ -334,6 +344,8 @@ with mlflow.start_run() as run:
     mlflow.log_param('max_iterations', max_iterations)
     mlflow.log_param('global_step_best', global_step_best)
     mlflow.log_metric('dice_val_best', dice_val_best)
+    mlflow.log_param('Dataset', "0-255")
+    mlflow.log_param('Dropout', dropout)
 
 print(
     f"train completed, best_metric: {dice_val_best:.4f} " f"at iteration: {global_step_best}")
