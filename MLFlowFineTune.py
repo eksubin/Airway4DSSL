@@ -67,6 +67,8 @@ def parse_arguments():
                         default="./Data/FrenchSpeakerDataset/Segmentations/", help="Directory with training data")
     parser.add_argument("--val_dir", type=str, default="./Data/FrenchSpeakerDataset/Segmentations_Val/",
                         help="Directory with validation data")
+    parser.add_argument("--note", type=str, default="",
+                        help="Provide note about the specific run")
     return parser.parse_args()
 
 
@@ -118,13 +120,13 @@ def binarize_label(label):
 
 
 def threshold_image(image):
-    return np.where(image < 20, 0, image)
+    return np.where(image < 0.08, 0, image)
 
 
 train_transforms = Compose([
     LoadImaged(keys=["image", "label"]),
     EnsureChannelFirstd(keys=["image", "label"]),
-    ScaleIntensityd(keys=["image"], minv=0, maxv=255),
+    ScaleIntensityd(keys=["image"], minv=0, maxv=1),
     LambdaD(keys="label", func=binarize_label),
     LambdaD(keys="image", func=threshold_image),
     CropForegroundd(keys=["image", "label"], source_key="image"),
@@ -142,9 +144,10 @@ train_transforms = Compose([
 val_transforms = Compose([
     LoadImaged(keys=["image", "label"]),
     EnsureChannelFirstd(keys=["image", "label"]),
-    ScaleIntensityd(keys=["image"], minv=-1.0, maxv=1.0),
+    ScaleIntensityd(keys=["image"], minv=0, maxv=1),
     LambdaD(keys="label", func=binarize_label),
     CropForegroundd(keys=["image", "label"], source_key="image"),
+    SpatialPadd(keys=["image", "label"], spatial_size=(64, 64, 64)),
     ToTensord(keys=["image", "label"]),
 ])
 
@@ -301,6 +304,9 @@ def train(global_step, train_loader, dice_val_best, global_step_best):
             if dice_val > dice_val_best:
                 dice_val_best = dice_val
                 global_step_best = global_step
+                mlflow.log_metric('Current_step', global_step_best)
+                # Log best dice value
+                mlflow.log_metric('dice_val_best', dice_val_best)
                 print(
                     "Model Was Saved ! Current Best Avg. Dice: {} Current Avg. Dice: {}".format(
                         dice_val_best, dice_val))
@@ -329,23 +335,24 @@ else:
 mlflow.set_experiment(experiment_name)
 
 with mlflow.start_run() as run:
+    # Optionally log other information
+    mlflow.log_param('max_iterations', max_iterations)
+    mlflow.log_param('global_step_best', global_step_best)
+    mlflow.log_param('Dataset', "0-1")
+    mlflow.log_param('Dropout', dropout)
+    mlflow.log_param('Descript', "corrected the validation to 0-255")
+
+    # Run the program
     while global_step < max_iterations:
         global_step, dice_val_best, global_step_best = train(
             global_step, train_loader, dice_val_best, global_step_best)
-
+    
     # Load the best model state
     model.load_state_dict(torch.load(
         os.path.join(logdir, experiment_name + ".pth")))
 
     # Log final model to MLflow
     mlflow.pytorch.log_model(model, f'models/{experiment_name}_final')
-
-    # Optionally log other information
-    mlflow.log_param('max_iterations', max_iterations)
-    mlflow.log_param('global_step_best', global_step_best)
-    mlflow.log_metric('dice_val_best', dice_val_best)
-    mlflow.log_param('Dataset', "0-255")
-    mlflow.log_param('Dropout', dropout)
 
 print(
     f"train completed, best_metric: {dice_val_best:.4f} " f"at iteration: {global_step_best}")

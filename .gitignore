@@ -3,3 +3,5 @@ logs/
 .ipynb_checkpoints
 DummyTraining
 mlruns
+output.log
+error.log
