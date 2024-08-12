@@ -32,11 +32,12 @@ python train.py --learning_rate 0.001 --batch_size 16 --epochs 50
 ```
 ### Datasets
 
-The datasets used for this project are provided in the figshare folder. The training dataset utilized for pre-training can be found at the following link:
+The datasets used for this project are provided in the figshare folder. The Dataset utilized for pre-training (Upstream task - French speaker dataset) can be found at the following link:
+- [French speaker dataset research article](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8486854/)
+- [Dataset download link](https://springernature.figshare.com/ndownloader/files/28531989)
 
-- [Training Dataset for Pre-Training](https://figshare.com/s/your_dataset_link)
-
-Additionally, the dataset collected from the University of Iowa research MRI scanner, which is used for fine-tuning the model, will be made available upon request or can be obtained through institutional access.
+Additionally, the dataset collected from the University of Iowa research MRI scanner, which is used for fine-tuning the model, will be made available upon request or can be obtained through institutional access. Please click here for making a request:
+- [Request for Downstream dataset](mailto:lingala.uiowa.edu)
 
 ## Model Architecture
 
@@ -44,7 +45,7 @@ Given below figure represents the model architecture used for this project. The 
 
 The architecture is based on a UNet combined with a Vision Transformer (ViT) backbone. This hybrid architecture leverages the strengths of both UNet for spatial features extraction and ViT for capturing long-range dependencies in the data.
 
-![Model Architecture](path/to/your/model_architecture_figure.png)
+![Model Architecture](./Figures/Network.png)
 
 The model consists of:
 
@@ -63,10 +64,11 @@ Given below are the project results containing both images and the table. Please
 
 Please cite the following papers if you are using our code or dataset for development:
 
-1. **Upper Airway Segmentation Using 4D Imaging**  
-   Link: [Upper Airway Segmentation Paper 1](https://doi.org/10.XXXX/upper-airway-segmentation-paper1)
+   [Automatic Multiple Articulator Segmentation in Dynamic Speech MRI Using a Protocol Adaptive Stacked Transfer Learning U-NET Model](https://www.mdpi.com/2306-5354/10/5/623)
+ 
+   [Airway segmentation in speech MRI using the U-net architecture](https://ieeexplore.ieee.org/abstract/document/9098536)
 
-2. **Enhanced Techniques for Upper Airway Segmentation**  
-   Link: [Upper Airway Segmentation Paper 2](https://doi.org/10.XXXX/upper-airway-segmentation-paper2)
-``` 
+   [Multimodal dataset of real-time 2D and static 3D MRI of healthy French speakers](https://www.nature.com/articles/s41597-021-01041-3)
+
+
 
