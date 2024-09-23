@@ -52,8 +52,8 @@ def parse_arguments():
     parser.add_argument("--dropout", type=float, default=0.0, help="Dropout rate")
     parser.add_argument("--use_pretrained", action="store_true", help="Flag to use pretrained model")
     parser.add_argument("--pretrained_path", type=str, default="./logs/Train-Thresh-255-2000EP-16th.pth", help="Path to the pretrained model")
-    parser.add_argument("--train_dir", type=str, default="./Data/FrenchSpeakerDataset/Segmentations/", help="Directory with training data")
-    parser.add_argument("--val_dir", type=str, default="./Data/FrenchSpeakerDataset/Segmentations_Val/", help="Directory with validation data")
+    parser.add_argument("--train_dir", type=str, default="", help="Directory with training data")
+    parser.add_argument("--val_dir", type=str, default="", help="Directory with validation data")
     parser.add_argument("--note", type=str, default="", help="Provide note about the specific run")
     return parser.parse_args()
 
