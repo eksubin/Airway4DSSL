@@ -6,3 +6,9 @@ mlruns
 output.log
 error.log
 Start_MLFlow.ipynb
+FourDUnetR/
+CLSTMUnet
+unet3d_with_time_best.pth
+job_script_SGL.sh
+job_script_Train.sh
+job_script_Train2.sh

@@ -29,7 +29,8 @@ from monai.transforms import (
     LambdaD,
     Transform,
     LoadImage,
-    ConcatItemsd
+    ConcatItemsd,
+    NormalizeIntensityd
 )
 import numpy as np
 import argparse
@@ -47,6 +48,9 @@ model_name = args.model_name
 threshold = args.threshold
 note = args.note
 dataset = args.dataset
+image_size = args.image_size
+train_dir = args.train_dir
+val_dir = args.val_dir
 
 # %%
 logdir_path = os.path.normpath(f"./logs/{model_name}/")
@@ -54,8 +58,8 @@ if not os.path.exists(logdir_path):
     os.mkdir(logdir_path)
 
 #Convert the train and validation images into a list with locations
-train_dir = "./Data/FrenchSpeakerDataset/NRRD_Files_N4Bias/"
-val_dir = "./Data/FrenchSpeakerDataset/NRRD_Files_N4Bias_Val/"
+#train_dir = "./Data/FrenchSpeakerDataset/NRRD_Files_N4Bias/"
+#val_dir = "./Data/FrenchSpeakerDataset/NRRD_Files_N4Bias_Val/"
 
 # Get sorted list of file paths
 timage_filenames = sorted([os.path.join(train_dir, f)
@@ -93,16 +97,14 @@ def threshold_image(image):
 train_transforms = Compose(
     [
         LoadImaged(keys=["image"]),
-        EnsureChannelFirstd(
-            keys=["image"]),
-        # Defines the image intensity
+        EnsureChannelFirstd(keys=["image"]),
+        NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
         ScaleIntensityd(keys=["image"], minv=image_min, maxv=image_max),
-        # Defines threshold for the image
         LambdaD(keys="image", func=threshold_image),
         CropForegroundd(keys=["image"], source_key="image"),
-        SpatialPadd(keys=["image"], spatial_size=(64, 64, 64)),
+        SpatialPadd(keys=["image"], spatial_size=(64, image_size, image_size)),
         RandSpatialCropSamplesd(keys=["image"], roi_size=(
-            64, 64, 64), random_size=False, num_samples=2),
+            64, image_size, image_size), random_size=False, num_samples=2),
         CopyItemsd(keys=["image"], times=2, names=[
             "gt_image", "image_2"], allow_missing_keys=False),
         OneOf(
@@ -111,7 +113,7 @@ train_transforms = Compose(
                     keys=["image"], prob=1.0, holes=6, spatial_size=5, dropout_holes=True, max_spatial_size=32
                 ),
                 RandCoarseDropoutd(
-                    keys=["image"], prob=1.0, holes=6, spatial_size=20, dropout_holes=False, max_spatial_size=64
+                    keys=["image"], prob=1.0, holes=6, spatial_size=20, dropout_holes=False, max_spatial_size=image_size
                 ),
             ]
         ),
@@ -124,7 +126,7 @@ train_transforms = Compose(
                     keys=["image_2"], prob=1.0, holes=6, spatial_size=5, dropout_holes=True, max_spatial_size=32
                 ),
                 RandCoarseDropoutd(
-                    keys=["image_2"], prob=1.0, holes=6, spatial_size=20, dropout_holes=False, max_spatial_size=64
+                    keys=["image_2"], prob=1.0, holes=6, spatial_size=20, dropout_holes=False, max_spatial_size=image_size
                 ),
             ]
         ),
@@ -155,8 +157,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 model = ViTAutoEnc(
     in_channels=1,
-    img_size=(64, 64, 64),
-    patch_size=(16, 16, 16),
+    img_size=(64, 128, 128,),
+    patch_size=(64, 64, 64),
     proj_type="conv",
     hidden_size=768,
     mlp_dim=3072,
@@ -274,5 +276,5 @@ for epoch in range(max_epochs):
             best_val_loss = total_val_loss
             checkpoint = {"epoch": max_epochs, "state_dict": model.state_dict(
             ), "optimizer": optimizer.state_dict()}
-            torch.save(checkpoint, os.path.join(logdir_path, experiment_name +"_4patch"+ ".pth"))
+            torch.save(checkpoint, os.path.join(logdir_path, experiment_name +"_"+str(image_size)+ "_" + dataset + ".pth"))
 print("Done")

@@ -7,8 +7,11 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import argparse
 import mlflow
+from torch.nn import DataParallel
+from PIL import Image
+import optuna
 
-from monai.losses import DiceCELoss
+from monai.losses import DiceCELoss, DiceLoss, FocalLoss
 from monai.inferers import sliding_window_inference
 from monai.config import print_config
 from monai.transforms import (
@@ -29,7 +32,8 @@ from monai.transforms import (
     ScaleIntensityd,
     SpatialPadd,
     RandSpatialCropSamplesd,
-    LambdaD
+    LambdaD,
+    ConcatItemsd
 )
 from monai.metrics import DiceMetric
 from monai.networks.nets import UNETR
@@ -57,12 +61,10 @@ def parse_arguments():
                         default="Test1", help="Name of the experiment")
     parser.add_argument("--epochs", type=int, default=20,
                         help="Number of epochs")
-    parser.add_argument("--dropout", type=float,
-                        default=0.0, help="Dropout rate")
     parser.add_argument("--use_pretrained", default=True,action="store_true",
                         help="Flag to use pretrained model")
     parser.add_argument("--pretrained_path", type=str,
-                        default="./logs/Train-Thresh-255-2000EP-16th.pth", help="Path to the pretrained model")
+                        help="Path to the pretrained model")
     parser.add_argument("--train_dir", type=str,
                         default="./Data/FrenchSpeakerDataset/Segmentations/", help="Directory with training data")
     parser.add_argument("--val_dir", type=str, default="./Data/FrenchSpeakerDataset/Segmentations_Val/",
@@ -81,7 +83,6 @@ max_iterations = args.max_iterations
 eval_num = args.eval_num
 experiment_name = args.experiment_name
 epochs = args.epochs
-dropout = args.dropout
 use_pretrained = args.use_pretrained
 pretrained_path = args.pretrained_path
 train_dir = args.train_dir
@@ -102,6 +103,7 @@ train_nrrd_files = sorted([os.path.join(train_dir, f) for f in os.listdir(
     train_dir) if f.endswith(".nrrd") and not f.endswith(".seg.nrrd")])
 train_seg_nrrd_files = sorted([os.path.join(train_dir, f)
                               for f in os.listdir(train_dir) if f.endswith(".seg.nrrd")])
+
 val_nrrd_files = sorted([os.path.join(val_dir, f) for f in os.listdir(
     val_dir) if f.endswith(".nrrd") and not f.endswith(".seg.nrrd")])
 val_seg_nrrd_files = sorted([os.path.join(val_dir, f)
@@ -111,6 +113,7 @@ train_datalist = [{"image": img, "label": lbl}
                   for img, lbl in zip(train_nrrd_files, train_seg_nrrd_files)]
 validation_datalist = [{"image": img, "label": lbl}
                        for img, lbl in zip(val_nrrd_files, val_seg_nrrd_files)]
+print(f" Trian datalist setup {train_datalist[0]}")
 
 # %%
 # Define transforms for training and validation
@@ -142,6 +145,7 @@ train_transforms = Compose([
     ToTensord(keys=["image", "label"]),
 ])
 
+# Validation transforms
 val_transforms = Compose([
     LoadImaged(keys=["image", "label"]),
     EnsureChannelFirstd(keys=["image", "label"]),
@@ -177,12 +181,9 @@ model = UNETR(
     pos_embed="conv",
     norm_name="instance",
     res_block=True,
-    dropout_rate=dropout,
 )
 model = model.to(device)
-
-# Load pretrained weights if specified
-if use_pretrained:
+if pretrained_path:
     print(f"Loading Weights from the Path {pretrained_path}")
     vit_dict = torch.load(pretrained_path, weights_only=False)
     
@@ -199,15 +200,11 @@ else:
     print("No weights were loaded, all weights are randomly initialized!")
 
 model.to(device)
-
-# %%
-# Setup loss function, optimizer, and metrics
-loss_function = DiceCELoss(to_onehot_y=True, softmax=True)
 torch.backends.cudnn.benchmark = True
-optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+# optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
 
-post_label = AsDiscrete(to_onehot=14)
-post_pred = AsDiscrete(argmax=True, to_onehot=14)
+# post_label = AsDiscrete(to_onehot=14)
+# post_pred = AsDiscrete(argmax=True, to_onehot=14)
 dice_metric = DiceMetric(include_background=True,
                          reduction="mean", get_not_nans=False)
 global_step = 0
@@ -220,9 +217,11 @@ metric_values = []
 # %% Define the validation component
 
 
-def validation(epoch_iterator_val, dice_val_best):
+def validation(epoch_iterator_val, dice_val_best, one_hot_val):
     model.eval()
     dice_vals = []
+    post_label = AsDiscrete(to_onehot=one_hot_val)
+    post_pred = AsDiscrete(argmax=True, to_onehot=one_hot_val)
 
     with torch.no_grad():
         for _step, batch in enumerate(epoch_iterator_val):
@@ -274,18 +273,31 @@ def validation(epoch_iterator_val, dice_val_best):
 
     return mean_dice_val
     #%% Define training function
-from PIL import Image
 
-def train(global_step, train_loader, dice_val_best, global_step_best):
+def train(global_step, train_loader, dice_val_best, global_step_best, loss_function, lr, one_hot_val, dropout):
+    model.dropout_rate = dropout 
     model.train()
     epoch_loss = 0
     step = 0
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    if loss_function == "DiceLoss":
+        loss_function = DiceLoss(to_onehot_y=True, softmax=True)
+    elif loss_function == "DiceCELoss":
+        loss_function = DiceCELoss(to_onehot_y=True, softmax=True)
+    else:
+        loss_function = FocalLoss(gamma=2, alpha=0.25)
+    
     epoch_iterator = tqdm(
         train_loader, desc="Training (X / X Steps) (loss=X.X)", dynamic_ncols=True)
     for step, batch in enumerate(epoch_iterator):
         step += 1
         x, y = (batch["image"].to(device), batch["label"].to(device))
         logit_map = model(x)
+        if loss_function == "FocalLoss":
+            if logit_map.shape[1] != 1:
+                logit_map = logit_map[:, 0, ...] + logit_map[:, 1, ...]
+                logit_map = logit_map.unsqueeze(1)
+
         loss = loss_function(logit_map, y)
         loss.backward()
         epoch_loss += loss.item()
@@ -301,7 +313,7 @@ def train(global_step, train_loader, dice_val_best, global_step_best):
         if (global_step % eval_num == 0 and global_step != 0) or global_step == max_iterations:
             epoch_iterator_val = tqdm(
                 val_loader, desc="Validate (X / X Steps) (dice=X.X)", dynamic_ncols=True)
-            dice_val = validation(epoch_iterator_val, dice_val_best)
+            dice_val = validation(epoch_iterator_val, dice_val_best, one_hot_val)
 
             epoch_loss /= step
             epoch_loss_values.append(epoch_loss)
@@ -313,14 +325,14 @@ def train(global_step, train_loader, dice_val_best, global_step_best):
                 # Log best dice value
                 mlflow.log_metric('dice_val_best', dice_val_best)
                 print(
-                    "Model Was Saved ! Current Best Avg. Dice: {} Current Avg. Dice: {}".format(
-                        dice_val_best, dice_val))
+                    "Model Was Saved ! Current Best Avg. Dice: {} Current Avg. Dice:{} Step {}".format(
+                        dice_val_best, dice_val, global_step))
                 torch.save(model.state_dict(),
-                           os.path.join(logdir, experiment_name + ".pth"))
+                           os.path.join(logdir, experiment_name + "_without"+ ".pth"))
             else:
                 print(
-                    "Model Was Not Saved ! Current Best Avg. Dice: {} Current Avg. Dice: {}".format(
-                        dice_val_best, dice_val
+                    "Model Was Not Saved ! Current Best Avg. Dice: {} Current Avg. Dice: {} Step {}".format(
+                        dice_val_best, dice_val, global_step
                     )
                 )
 
@@ -339,25 +351,37 @@ else:
     experiment_id = experiment.experiment_id
 mlflow.set_experiment(experiment_name)
 
-with mlflow.start_run() as run:
-    # Optionally log other information
-    mlflow.log_param('max_iterations', max_iterations)
-    mlflow.log_param('global_step_best', global_step_best)
-    mlflow.log_param('Dataset', "0-1")
-    mlflow.log_param('Dropout', dropout)
-    mlflow.log_param('Descript', note)
+def objective(trial):
 
-    # Run the program
-    while global_step < max_iterations:
-        global_step, dice_val_best, global_step_best = train(
-            global_step, train_loader, dice_val_best, global_step_best)
-    
-    # Load the best model state
-    model.load_state_dict(torch.load(
-        os.path.join(logdir, experiment_name + ".pth")))
+    lr = trial.suggest_categorical("lr", [1e-5, 1e-3, 1e-2])
+    one_hot_val = trial.suggest_categorical("one_hot_val", [2, 4, 8, 14])
+    loss_fn_name = trial.suggest_categorical("loss_fn", ["DiceLoss", "DiceCELoss",])
+    dropout = trial.suggest_categorical("dropout", [0.1, 0.2, 0.4, 0.5])
+    global_step = 0
+    dice_val_best = 0.0
+    global_step_best = 0
+    with mlflow.start_run() as run:
+        # Optionally log other information
+        mlflow.log_param('max_iterations', max_iterations)
+        mlflow.log_param('global_step_best', global_step_best)
+        mlflow.log_param('Dropout',dropout )
+        mlflow.log_param('one_hot_val', one_hot_val)
+        mlflow.log_param('lr',lr)
+        mlflow.log_param('loss_function',loss_fn_name)
 
-    # Log final model to MLflow
-    mlflow.pytorch.log_model(model, f'models/{experiment_name}_final')
+        # Run the program
+        while global_step < max_iterations:
+            global_step, dice_val_best, global_step_best = train(
+                global_step, train_loader, dice_val_best, global_step_best, lr=lr, loss_function=loss_fn_name, one_hot_val=one_hot_val, dropout=dropout)
 
-print(
-    f"train completed, best_metric: {dice_val_best:.4f} " f"at iteration: {global_step_best}")
+        return dice_val_best
+
+
+# Optuna study for hyperparameter optimization
+study = optuna.create_study(direction="maximize")
+study.optimize(objective, n_trials=30)
+
+# Print best trial
+best_trial = study.best_trial
+print(f"Best trial parameters: {best_trial.params}")
+print(f"Best Dice Score: {best_trial.value}")

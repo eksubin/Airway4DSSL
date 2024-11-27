@@ -9,7 +9,7 @@ import argparse
 import mlflow
 from torch.nn import DataParallel
 
-from monai.losses import DiceCELoss
+from monai.losses import DiceCELoss, DiceLoss
 from monai.inferers import sliding_window_inference
 from monai.config import print_config
 from monai.transforms import (
@@ -31,7 +31,8 @@ from monai.transforms import (
     SpatialPadd,
     RandSpatialCropSamplesd,
     LambdaD,
-    ConcatItemsd
+    ConcatItemsd,
+    NormalizeIntensityd
 )
 from monai.metrics import DiceMetric
 from monai.networks.nets import UNETR
@@ -131,18 +132,19 @@ def threshold_image(image):
 train_transforms = Compose([
     LoadImaged(keys=["image", "label"]),
     EnsureChannelFirstd(keys=["image", "label"]),
+    NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
     ScaleIntensityd(keys=["image"], minv=0, maxv=1),
     LambdaD(keys="label", func=binarize_label),
-    LambdaD(keys="image", func=threshold_image),
+    #LambdaD(keys="image", func=threshold_image),
     CropForegroundd(keys=["image", "label"], source_key="image"),
-    SpatialPadd(keys=["image", "label"], spatial_size=(64, 64, 64)),
+    SpatialPadd(keys=["image", "label"], spatial_size=(128, 128, 32)),
     RandSpatialCropSamplesd(keys=["image", "label"], roi_size=(
-        64, 64, 64), random_size=False, num_samples=2),
+        128, 128, 32), random_size=False, num_samples=2),
     RandFlipd(keys=["image", "label"], spatial_axis=[0], prob=0.10),
     RandFlipd(keys=["image", "label"], spatial_axis=[1], prob=0.10),
     RandFlipd(keys=["image", "label"], spatial_axis=[2], prob=0.10),
-    RandRotate90d(keys=["image", "label"], prob=0.10, max_k=3),
-    RandShiftIntensityd(keys=["image"], offsets=0.10, prob=0.50),
+    RandRotate90d(keys=["image", "label"], prob=0.05, max_k=3),
+    RandShiftIntensityd(keys=["image"], offsets=0.10, prob=0.05),
     ToTensord(keys=["image", "label"]),
 ])
 
@@ -150,10 +152,11 @@ train_transforms = Compose([
 val_transforms = Compose([
     LoadImaged(keys=["image", "label"]),
     EnsureChannelFirstd(keys=["image", "label"]),
+    NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
     ScaleIntensityd(keys=["image"], minv=0, maxv=1),
     LambdaD(keys="label", func=binarize_label),
     CropForegroundd(keys=["image", "label"], source_key="image"),
-    SpatialPadd(keys=["image", "label"], spatial_size=(64, 64, 64)),
+    SpatialPadd(keys=["image", "label"], spatial_size=(128, 128, 32)),
     ToTensord(keys=["image", "label"]),
 ])
 
@@ -174,7 +177,7 @@ val_loader = DataLoader(val_ds, batch_size=1,
 model = UNETR(
     in_channels=1,
     out_channels=2,
-    img_size=(64, 64, 64),
+    img_size=(128, 128, 32),
     feature_size=16,
     hidden_size=768,
     mlp_dim=3072,
@@ -214,7 +217,7 @@ model.to(device)
 
 # %%
 # Setup loss function, optimizer, and metrics
-loss_function = DiceCELoss(to_onehot_y=True, softmax=True)
+loss_function = DiceCELoss(to_onehot_y=True, sigmoid=False, softmax=True)
 torch.backends.cudnn.benchmark = True
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
 
@@ -241,7 +244,7 @@ def validation(epoch_iterator_val, dice_val_best):
             val_inputs, val_labels = (
                 batch["image"].to(device), batch["label"].to(device))
             val_outputs = sliding_window_inference(
-                val_inputs, (64, 64, 64), 4, model)
+                val_inputs, (128, 128, 32), 4, model, overlap=0)
             val_labels_list = decollate_batch(val_labels)
             val_labels_convert = [post_label(
                 val_label_tensor) for val_label_tensor in val_labels_list]
@@ -259,7 +262,7 @@ def validation(epoch_iterator_val, dice_val_best):
     mean_dice_val = np.mean(dice_vals)
     if mean_dice_val > dice_val_best:
         print(f"validation output shapes {val_outputs.shape}")
-        image_slice = val_outputs[0, 0, :, :, 35].cpu().numpy() > 0.2
+        image_slice = val_outputs[0, 0, :, :, 35].cpu().numpy() > 0.1
         # image_slice = (image_slice * 255).astype(np.uint8)
         image = Image.fromarray(image_slice)
         image_path = os.path.join(
@@ -328,7 +331,7 @@ def train(global_step, train_loader, dice_val_best, global_step_best):
                     "Model Was Saved ! Current Best Avg. Dice: {} Current Avg. Dice:{} Step {}".format(
                         dice_val_best, dice_val, global_step))
                 torch.save(model.state_dict(),
-                           os.path.join(logdir, experiment_name + ".pth"))
+                           os.path.join(logdir, experiment_name + "_"+ str(lr)+ "_"+str(epochs)+"_"+ str(dropout)+str(note)+ ".pth"))
             else:
                 print(
                     "Model Was Not Saved ! Current Best Avg. Dice: {} Current Avg. Dice: {} Step {}".format(
@@ -366,7 +369,7 @@ with mlflow.start_run() as run:
     
     # Load the best model state
     model.load_state_dict(torch.load(
-        os.path.join(logdir, experiment_name + ".pth")))
+        os.path.join(logdir, experiment_name + "_"+ str(lr)+ "_"+str(epochs)+"_"+ str(dropout)+ note + ".pth")))
 
     # Log final model to MLflow
     mlflow.pytorch.log_model(model, f'models/{experiment_name}_final')
