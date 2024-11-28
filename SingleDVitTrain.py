@@ -57,10 +57,6 @@ logdir_path = os.path.normpath(f"./logs/{model_name}/")
 if not os.path.exists(logdir_path):
     os.mkdir(logdir_path)
 
-#Convert the train and validation images into a list with locations
-#train_dir = "./Data/FrenchSpeakerDataset/NRRD_Files_N4Bias/"
-#val_dir = "./Data/FrenchSpeakerDataset/NRRD_Files_N4Bias_Val/"
-
 # Get sorted list of file paths
 timage_filenames = sorted([os.path.join(train_dir, f)
                           for f in os.listdir(train_dir) if f.endswith(".nrrd")])
@@ -94,17 +90,21 @@ print(train_datalist[:5], validation_datalist[0:5])
 def threshold_image(image):
     return np.where(image < threshold, 0, image)
 
+def switch_shape(image):
+    return image.permute(2, 0, 1)  # Use permute for PyTorch tensors
+
 train_transforms = Compose(
     [
         LoadImaged(keys=["image"]),
+        LambdaD(keys=["image"], func=switch_shape),
         EnsureChannelFirstd(keys=["image"]),
         NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
         ScaleIntensityd(keys=["image"], minv=image_min, maxv=image_max),
         LambdaD(keys="image", func=threshold_image),
         CropForegroundd(keys=["image"], source_key="image"),
-        SpatialPadd(keys=["image"], spatial_size=(64, image_size, image_size)),
+        SpatialPadd(keys=["image"], spatial_size=(64, 256, 256)),
         RandSpatialCropSamplesd(keys=["image"], roi_size=(
-            64, image_size, image_size), random_size=False, num_samples=2),
+            64, image_size, image_size), random_size=False, num_samples=4),
         CopyItemsd(keys=["image"], times=2, names=[
             "gt_image", "image_2"], allow_missing_keys=False),
         OneOf(
@@ -157,7 +157,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 model = ViTAutoEnc(
     in_channels=1,
-    img_size=(64, 128, 128,),
+    img_size=(64, 64, 64,),
     patch_size=(64, 64, 64),
     proj_type="conv",
     hidden_size=768,
@@ -166,10 +166,10 @@ model = ViTAutoEnc(
 
 model = model.to(device)
 
-if torch.cuda.device_count() > 1:
+# if torch.cuda.device_count() > 1:
 
-    model = DataParallel(model)
-    print(f"###### Using data parallism {torch.cuda.device_count()}")
+#     model = DataParallel(model)
+#     print(f"###### Using data parallism {torch.cuda.device_count()}")
 
 # Define Hyper-paramters for training loop
 experiment_name = model_name
